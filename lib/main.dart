@@ -14,14 +14,31 @@ const Color panelBorder = Color(0x6622E06B);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'anter.music.audio',
-    androidNotificationChannelName: 'ANTER MUSIC',
-    androidNotificationChannelDescription: 'Music playback controls',
-    androidNotificationOngoing: true,
-    androidStopForegroundOnPause: false,
-  );
-  runApp(const AnterMusicApp());
+  ErrorWidget.builder = (details) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text('UI ERROR:\n${details.exception}', style: const TextStyle(color: Colors.red, fontSize: 12)),
+      );
+  runZonedGuarded(() async {
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'anter.music.audio',
+      androidNotificationChannelName: 'ANTER MUSIC',
+      androidNotificationChannelDescription: 'Music playback controls',
+      androidNotificationOngoing: true,
+      androidStopForegroundOnPause: false,
+    );
+    runApp(const AnterMusicApp());
+  }, (error, stack) {
+    runApp(MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Text('STARTUP ERROR:\n$error', style: const TextStyle(color: Colors.red, fontSize: 13)),
+          ),
+        ),
+      ),
+    ));
+  });
 }
 
 class Track {
@@ -77,7 +94,7 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
     _player.playerStateStream.listen((s) {
       if (mounted) setState(() => _playing = s.playing);
     });
-    _loadLibrary();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadLibrary());
   }
 
   @override
