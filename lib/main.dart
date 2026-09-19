@@ -73,7 +73,7 @@ class _MusicHomeState extends State<MusicHome> {
   }
 
   Future<void> _pickMusic() async {
-    final files = await FilePickerPlatform.instance.pickFiles(type: FileType.audio, allowMultiple: true);
+    final files = await FilePickerPlatform.instance.pickFiles(type: FileType.audio);
     if (files == null || files.isEmpty) return;
     final added = files.where((f) => f.path != null).map((f) {
       final name = f.name.trim().isEmpty ? 'Unknown song' : f.name;
