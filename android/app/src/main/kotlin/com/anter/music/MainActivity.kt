@@ -44,11 +44,19 @@ class MainActivity : FlutterActivity() {
 
     private fun scanSongs(): List<Map<String, Any>> {
         val list = mutableListOf<Map<String, Any>>()
-        val uri = if (Build.VERSION.SDK_INT >= 29) MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-                  else MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.TITLE, MediaStore.Audio.Media.DURATION)
+        val uri = if (Build.VERSION.SDK_INT >= 29) {
+            MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+        } else {
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        }
+        val projection = arrayOf(
+            MediaStore.Audio.Media.DATA,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.DURATION
+        )
         val selection = MediaStore.Audio.Media.IS_MUSIC + " != 0"
-        contentResolver.query(uri, projection, selection, null, MediaStore.Audio.Media.DATE_ADDED + " DESC")?.use { c ->
+        val order = MediaStore.Audio.Media.DATE_ADDED + " DESC"
+        contentResolver.query(uri, projection, selection, null, order)?.use { c ->
             val iData = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
             val iTitle = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val iDur = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
@@ -60,7 +68,5 @@ class MainActivity : FlutterActivity() {
             }
         }
         return list
-
-</parameter>
-</function>
-</tool_call>
+    }
+}
