@@ -73,7 +73,7 @@ class _MusicHomeState extends State<MusicHome> {
   }
 
   Future<void> _pickMusic() async {
-    final files = await FilePicker.platform.pickFiles(type: FileType.audio, allowMultiple: true);
+    final files = await FilePickerPlatform.instance.pickFiles(type: FileType.audio, allowMultiple: true);
     if (files == null || files.isEmpty) return;
     final added = files.where((f) => f.path != null).map((f) {
       final name = f.name.trim().isEmpty ? 'Unknown song' : f.name;
@@ -206,8 +206,8 @@ class _MusicHomeState extends State<MusicHome> {
               StreamBuilder<Duration>(stream: _player.positionStream, builder: (context, snap) {
                 final duration = _player.duration ?? Duration.zero;
                 final position = snap.data ?? Duration.zero;
-                final max = duration.inMilliseconds.toDouble().clamp(1, double.infinity);
-                final value = position.inMilliseconds.toDouble().clamp(0, max);
+                final double max = duration.inMilliseconds.toDouble().clamp(1, double.infinity).toDouble();
+                final double value = position.inMilliseconds.toDouble().clamp(0, max).toDouble();
                 return Column(children: [Slider(value: value, max: max, onChanged: (v) => _player.seek(Duration(milliseconds: v.round()))), Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(_fmt(position), style: const TextStyle(color: Colors.white38, fontSize: 12)), Text(_fmt(duration), style: const TextStyle(color: Colors.white38, fontSize: 12))])]);
               }),
               const SizedBox(height: 4),
