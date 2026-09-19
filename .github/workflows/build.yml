@@ -36,6 +36,14 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Generate Gradle wrapper
+        run: |
+          mkdir -p /tmp/wrap && cd /tmp/wrap
+          gradle wrapper --gradle-version 8.13
+          cp gradlew gradlew.bat "$GITHUB_WORKSPACE/android/"
+          mkdir -p "$GITHUB_WORKSPACE/android/gradle/wrapper"
+          cp gradle/wrapper/gradle-wrapper.jar gradle/wrapper/gradle-wrapper.properties "$GITHUB_WORKSPACE/android/gradle/wrapper/"
+
       - name: Build release APK
         run: flutter build apk --release
 
