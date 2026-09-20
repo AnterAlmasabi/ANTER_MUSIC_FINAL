@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
-
-const MethodChannel mediaChannel = MethodChannel('anter.music/media');
+import 'package:on_audio_query/on_audio_query.dart';
 
 const Color accent = Color(0xFF22E06B);
 const Color accent2 = Color(0xFF2E7CF6);
@@ -18,7 +16,7 @@ void main() async {
         padding: const EdgeInsets.all(16),
         child: Text('UI ERROR:\n${details.exception}', style: const TextStyle(color: Colors.red, fontSize: 12)),
       );
-  runZonedGuarded(() async {
+  try {
     await JustAudioBackground.init(
       androidNotificationChannelId: 'anter.music.audio',
       androidNotificationChannelName: 'ANTER MUSIC',
@@ -26,19 +24,8 @@ void main() async {
       androidNotificationOngoing: true,
       androidStopForegroundOnPause: false,
     );
-    runApp(const AnterMusicApp());
-  }, (error, stack) {
-    runApp(MaterialApp(
-      home: Scaffold(
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text('STARTUP ERROR:\n$error', style: const TextStyle(color: Colors.red, fontSize: 13)),
-          ),
-        ),
-      ),
-    ));
-  });
+  } catch (_) {}
+  runApp(const AnterMusicApp());
 }
 
 class Track {
@@ -74,6 +61,7 @@ class MusicHome extends StatefulWidget {
 
 class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMixin {
   final AudioPlayer _player = AudioPlayer();
+  final OnAudioQuery _audioQuery = OnAudioQuery();
   final TextEditingController _searchCtrl = TextEditingController();
   final List<Track> _tracks = [];
   late final AnimationController _eq;
@@ -108,24 +96,23 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
 
   Future<void> _loadLibrary() async {
     setState(() => _loading = true);
-    bool granted = false;
-    try {
-      granted = await mediaChannel.invokeMethod<bool>('requestPermission') ?? false;
-    } catch (_) {}
     final List<Track> list = [];
-    if (granted) {
-      try {
-        final raw = await mediaChannel.invokeMethod<List>('scanSongs');
-        for (final e in raw ?? const []) {
-          final m = Map<String, dynamic>.from(e as Map);
-          list.add(Track(
-            m['path'] as String,
-            (m['title'] as String?) ?? 'Unknown',
-            Duration(milliseconds: (m['duration'] as int?) ?? 0),
-          ));
+    try {
+      bool granted = await _audioQuery.permissionsStatus();
+      if (!granted) granted = await _audioQuery.requestPermission();
+      if (granted) {
+        final songs = await _audioQuery.querySongs(
+          sortType: SongSortType.DATE_ADDED,
+          orderType: OrderType.DESC_OR_GREATER,
+          uriType: UriType.EXTERNAL,
+        );
+        for (final s in songs) {
+          final path = s.data;
+          if (path.isEmpty) continue;
+          list.add(Track(path, s.title, Duration(milliseconds: s.duration ?? 0)));
         }
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
     if (mounted) {
       setState(() {
         _tracks.clear();
@@ -303,29 +290,26 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
   }
 
   Widget _eqBars() {
-    final heights = [22.0, 40, 58, 32, 62, 30, 44];
-    return AnimatedBuilder(
-      animation: _eq,
-      builder: (context, child) {
-        return Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: List.generate(heights.length, (i) {
-            final wave = _playing ? (math.sin(_eq.value * 2 * math.pi + i * 1.15) * 0.5 + 0.5) : 0.25;
-            final h = heights[i] * (0.35 + 0.65 * wave);
-            return Container(
-              width: 6,
-              height: h,
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              decoration: BoxDecoration(
-                color: accent,
-                borderRadius: BorderRadius.circular(3),
-                boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.7), blurRadius: 8)],
-              ),
-            );
-          }),
-        );
-      },
+    const heights = <double>[22, 40, 58, 32, 62, 30, 44];
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _eq,
+        builder: (context, child) {
+          return Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: List.generate(heights.length, (i) {
+              final wave = _playing ? (math.sin(_eq.value * 2 * math.pi + i * 1.15) * 0.5 + 0.5) : 0.25;
+              return Container(
+                width: 6,
+                height: heights[i] * (0.35 + 0.65 * wave),
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(3)),
+              );
+            }),
+          );
+        },
+      ),
     );
   }
 
@@ -379,8 +363,8 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
   }
 
   Widget _timerView() {
-    final names = ['Off', '5 minutes', '10 minutes', '15 minutes', '30 minutes', '60 minutes'];
-    final values = <Duration?>[null, const Duration(minutes: 5), const Duration(minutes: 10), const Duration(minutes: 15), const Duration(minutes: 30), const Duration(minutes: 60)];
+    const names = ['Off', '5 minutes', '10 minutes', '15 minutes', '30 minutes', '60 minutes'];
+    const values = <Duration?>[null, Duration(minutes: 5), Duration(minutes: 10), Duration(minutes: 15), Duration(minutes: 30), Duration(minutes: 60)];
     return ListView(
       padding: EdgeInsets.zero,
       children: [
