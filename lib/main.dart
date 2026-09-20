@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
-import 'package:on_audio_query/on_audio_query.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 const Color accent = Color(0xFF22E06B);
 const Color accent2 = Color(0xFF2E7CF6);
@@ -61,7 +62,6 @@ class MusicHome extends StatefulWidget {
 
 class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMixin {
   final AudioPlayer _player = AudioPlayer();
-  final OnAudioQuery _audioQuery = OnAudioQuery();
   final TextEditingController _searchCtrl = TextEditingController();
   final List<Track> _tracks = [];
   late final AnimationController _eq;
@@ -71,6 +71,9 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
   bool _playing = false;
   bool _loading = true;
   AppView _view = AppView.home;
+
+  static const _skipDirs = {'Android', 'data', 'cache', 'Cache', 'temp', 'Temp', '.thumbnails'};
+  static const _audioExts = ['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.wma'];
 
   @override
   void initState() {
@@ -94,25 +97,44 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
     super.dispose();
   }
 
+  Future<bool> _ensurePermission() async {
+    try {
+      var s = await Permission.audio.status;
+      if (!s.isGranted) s = await Permission.audio.request();
+      if (s.isGranted) return true;
+      var s2 = await Permission.storage.status;
+      if (!s2.isGranted) s2 = await Permission.storage.request();
+      return s2.isGranted;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _loadLibrary() async {
     setState(() => _loading = true);
     final List<Track> list = [];
-    try {
-      bool granted = await _audioQuery.permissionsStatus();
-      if (!granted) granted = await _audioQuery.requestPermission();
-      if (granted) {
-        final songs = await _audioQuery.querySongs(
-          sortType: SongSortType.DATE_ADDED,
-          orderType: OrderType.DESC_OR_GREATER,
-          uriType: UriType.EXTERNAL,
-        );
-        for (final s in songs) {
-          final path = s.data;
-          if (path.isEmpty) continue;
-          list.add(Track(path, s.title, Duration(milliseconds: s.duration ?? 0)));
-        }
+    if (await _ensurePermission()) {
+      final stack = <String>['/storage/emulated/0'];
+      while (stack.isNotEmpty && list.length < 3000) {
+        final dir = Directory(stack.removeLast());
+        try {
+          await for (final e in dir.list(followLinks: false)) {
+            if (e is Directory) {
+              final name = e.path.split('/').last;
+              if (name.startsWith('.') || _skipDirs.contains(name)) continue;
+              stack.add(e.path);
+            } else if (e is File) {
+              final p = e.path.toLowerCase();
+              if (_audioExts.any((x) => p.endsWith(x))) {
+                final file = e.path.split('/').last;
+                list.add(Track(e.path, file.replaceFirst(RegExp(r'\.[^.]+$'), ''), Duration.zero));
+              }
+            }
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
+      list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+    }
     if (mounted) {
       setState(() {
         _tracks.clear();
@@ -327,7 +349,7 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
         child: Icon(active ? Icons.equalizer_rounded : Icons.music_note_rounded, color: active ? accent : Colors.white54, size: 20),
       ),
       title: Text(tr.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: active ? accent : Colors.white, fontWeight: FontWeight.w600)),
-      subtitle: Text(_fmt(tr.duration), style: const TextStyle(color: Colors.white38, fontSize: 11)),
+      subtitle: Text(tr.duration == Duration.zero ? '--:--' : _fmt(tr.duration), style: const TextStyle(color: Colors.white38, fontSize: 11)),
     );
   }
 
