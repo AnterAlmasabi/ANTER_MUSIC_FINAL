@@ -174,7 +174,7 @@ class _HomeState extends State<Home> with SingleTickerProviderStateMixin {
     return [for (int i = 0; i < _tracks.length; i++) if (_tracks[i].title.toLowerCase().contains(q)) i];
   }
 
-  Widget _eq() {
+  Widget _eqBars() {
     const hs = <double>[10, 18, 26, 14, 22];
     return RepaintBoundary(
       child: AnimatedBuilder(
@@ -206,7 +206,7 @@ class _HomeState extends State<Home> with SingleTickerProviderStateMixin {
         children: [
           Row(
             children: [
-              _eq(),
+              _eqBars(),
               const SizedBox(width: 10),
               Expanded(child: Text(_cur?.title ?? 'ANTER MUSIC', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700))),
               if (_sleepLeft != null) Text(_fmt(_sleepLeft), style: const TextStyle(color: accent, fontSize: 12)),
