@@ -1,22 +1,20 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+const MethodChannel scanChannel = MethodChannel('anter.music/scan');
+
 const Color accent = Color(0xFF22E06B);
-const Color accent2 = Color(0xFF2E7CF6);
-const Color panelBg = Color(0xDD0A1C12);
-const Color panelBorder = Color(0x6622E06B);
+const Color bgTop = Color(0xFF0C2417);
+const Color bgBottom = Color(0xFF04100A);
+const Color card = Color(0xDD0A1C12);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  ErrorWidget.builder = (details) => Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text('UI ERROR:\n${details.exception}', style: const TextStyle(color: Colors.red, fontSize: 12)),
-      );
   try {
     await JustAudioBackground.init(
       androidNotificationChannelId: 'anter.music.audio',
@@ -36,8 +34,6 @@ class Track {
   Track(this.path, this.title, this.duration);
 }
 
-enum AppView { home, search, library, timer }
-
 class AnterMusicApp extends StatelessWidget {
   const AnterMusicApp({super.key});
   @override
@@ -46,113 +42,97 @@ class AnterMusicApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'ANTER MUSIC',
       theme: ThemeData.dark(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: const Color(0xFF04100A),
+        scaffoldBackgroundColor: bgBottom,
         colorScheme: ColorScheme.dark(primary: accent),
       ),
-      home: const MusicHome(),
+      home: const Home(),
     );
   }
 }
 
-class MusicHome extends StatefulWidget {
-  const MusicHome({super.key});
+class Home extends StatefulWidget {
+  const Home({super.key});
   @override
-  State<MusicHome> createState() => _MusicHomeState();
+  State<Home> createState() => _HomeState();
 }
 
-class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMixin {
+class _HomeState extends State<Home> with SingleTickerProviderStateMixin {
   final AudioPlayer _player = AudioPlayer();
-  final TextEditingController _searchCtrl = TextEditingController();
+  final TextEditingController _search = TextEditingController();
   final List<Track> _tracks = [];
   late final AnimationController _eq;
   Timer? _sleepTimer;
-  Duration? _sleepRemaining;
-  int _currentIndex = -1;
+  Duration? _sleepLeft;
+  int _current = -1;
   bool _playing = false;
   bool _loading = true;
-  AppView _view = AppView.home;
-
-  static const _skipDirs = {'Android', 'data', 'cache', 'Cache', 'temp', 'Temp', '.thumbnails'};
-  static const _audioExts = ['.mp3', '.m4a', '.aac', '.wav', '.flac', '.ogg', '.opus', '.wma'];
+  int _tab = 0;
 
   @override
   void initState() {
     super.initState();
-    _eq = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..repeat(reverse: true);
+    _eq = AnimationController(vsync: this, duration: const Duration(milliseconds: 700))..repeat(reverse: true);
     _player.currentIndexStream.listen((i) {
-      if (mounted && i != null) setState(() => _currentIndex = i);
+      if (mounted && i != null) setState(() => _current = i);
     });
     _player.playerStateStream.listen((s) {
       if (mounted) setState(() => _playing = s.playing);
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadLibrary());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   @override
   void dispose() {
     _sleepTimer?.cancel();
     _eq.dispose();
-    _searchCtrl.dispose();
+    _search.dispose();
     _player.dispose();
     super.dispose();
   }
 
-  Future<bool> _ensurePermission() async {
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    final list = <Track>[];
     try {
       var s = await Permission.audio.status;
       if (!s.isGranted) s = await Permission.audio.request();
-      if (s.isGranted) return true;
-      var s2 = await Permission.storage.status;
-      if (!s2.isGranted) s2 = await Permission.storage.request();
-      return s2.isGranted;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<void> _loadLibrary() async {
-    setState(() => _loading = true);
-    final List<Track> list = [];
-    if (await _ensurePermission()) {
-      final stack = <String>['/storage/emulated/0'];
-      while (stack.isNotEmpty && list.length < 3000) {
-        final dir = Directory(stack.removeLast());
-        try {
-          await for (final e in dir.list(followLinks: false)) {
-            if (e is Directory) {
-              final name = e.path.split('/').last;
-              if (name.startsWith('.') || _skipDirs.contains(name)) continue;
-              stack.add(e.path);
-            } else if (e is File) {
-              final p = e.path.toLowerCase();
-              if (_audioExts.any((x) => p.endsWith(x))) {
-                final file = e.path.split('/').last;
-                list.add(Track(e.path, file.replaceFirst(RegExp(r'\.[^.]+$'), ''), Duration.zero));
-              }
-            }
-          }
-        } catch (_) {}
+      if (!s.isGranted) {
+        var s2 = await Permission.storage.status;
+        if (!s2.isGranted) s2 = await Permission.storage.request();
       }
-      list.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
-    }
+      final raw = await scanChannel.invokeMethod<List>('scanSongs');
+      for (final e in raw ?? const []) {
+        final m = Map<String, dynamic>.from(e as Map);
+        list.add(Track(
+          m['path'] as String,
+          (m['title'] as String?) ?? 'Unknown',
+          Duration(milliseconds: (m['duration'] as int?) ?? 0),
+        ));
+      }
+    } catch (_) {}
     if (mounted) {
       setState(() {
-        _tracks.clear();
-        _tracks.addAll(list);
+        _tracks
+          ..clear()
+          ..addAll(list);
         _loading = false;
       });
     }
   }
 
-  Track? get _current => (_currentIndex >= 0 && _currentIndex < _tracks.length) ? _tracks[_currentIndex] : null;
+  Track? get _cur => (_current >= 0 && _current < _tracks.length) ? _tracks[_current] : null;
 
-  Future<void> _playTrack(int index) async {
-    if (index < 0 || index >= _tracks.length) return;
-    final sources = _tracks.asMap().entries.map((e) {
-      return AudioSource.file(e.value.path, tag: MediaItem(id: '${e.key}', title: e.value.title, album: 'ANTER MUSIC'));
-    }).toList();
-    await _player.setAudioSources(sources, initialIndex: index);
-    await _player.play();
+  Future<void> _play(int i) async {
+    if (i < 0 || i >= _tracks.length) return;
+    try {
+      final sources = _tracks
+          .asMap()
+          .entries
+          .map((e) => AudioSource.file(e.value.path, tag: MediaItem(id: '${e.key}', title: e.value.title, album: 'ANTER MUSIC')))
+          .toList();
+      await _player.setAudioSources(sources, initialIndex: i);
+      await _player.play();
+    } catch (_) {}
   }
 
   Future<void> _toggle() async {
@@ -161,35 +141,23 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
     } else if (_player.sequence != null) {
       await _player.play();
     } else if (_tracks.isNotEmpty) {
-      await _playTrack(_currentIndex >= 0 ? _currentIndex : 0);
+      await _play(_current >= 0 ? _current : 0);
     }
   }
 
-  Future<void> _next() async {
-    if (_player.hasNext) await _player.seekToNext();
-  }
-
-  Future<void> _previous() async {
-    if (_player.hasPrevious) {
-      await _player.seekToPrevious();
-    } else {
-      await _player.seek(Duration.zero);
-    }
-  }
-
-  void _setSleep(Duration? duration) {
+  void _setSleep(Duration? d) {
     _sleepTimer?.cancel();
-    setState(() => _sleepRemaining = duration);
-    if (duration == null) return;
-    _sleepTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    setState(() => _sleepLeft = d);
+    if (d == null) return;
+    _sleepTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       if (!mounted) return;
-      final r = (_sleepRemaining ?? Duration.zero) - const Duration(seconds: 1);
+      final r = (_sleepLeft ?? Duration.zero) - const Duration(seconds: 1);
       if (r <= Duration.zero) {
-        timer.cancel();
+        t.cancel();
         _player.pause();
-        setState(() => _sleepRemaining = null);
+        setState(() => _sleepLeft = null);
       } else {
-        setState(() => _sleepRemaining = r);
+        setState(() => _sleepLeft = r);
       }
     });
   }
@@ -200,355 +168,215 @@ class _MusicHomeState extends State<MusicHome> with SingleTickerProviderStateMix
     return '${s ~/ 60}:${(s % 60).toString().padLeft(2, '0')}';
   }
 
-  Decoration get _panelDeco => BoxDecoration(
-        borderRadius: BorderRadius.circular(26),
-        color: panelBg,
-        border: Border.all(color: panelBorder, width: 1),
-        boxShadow: const [BoxShadow(color: Color(0x3322E06B), blurRadius: 26)],
-      );
-
-  Widget _logo(double size) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: const LinearGradient(colors: [Color(0xFF3AF07E), Color(0xFF0FA84E)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-        boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.6), blurRadius: size / 2.5)],
-      ),
-      child: Icon(Icons.music_note_rounded, color: Colors.black, size: size * 0.55),
-    );
+  List<int> _indexes() {
+    final q = _search.text.trim().toLowerCase();
+    if (_tab == 0 || q.isEmpty) return List.generate(_tracks.length, (i) => i);
+    return [for (int i = 0; i < _tracks.length; i++) if (_tracks[i].title.toLowerCase().contains(q)) i];
   }
 
-  Widget _railButton(AppView v, IconData icon) {
-    final active = _view == v;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Container(width: 3, height: 22, margin: const EdgeInsets.only(right: 6), color: active ? Colors.white : Colors.transparent),
-          GestureDetector(
-            onTap: () => setState(() => _view = v),
-            child: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: active ? const Color(0x33FFFFFF) : Colors.transparent,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Icon(icon, color: active ? Colors.white : Colors.white54, size: 22),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _rail() {
-    return Container(
-      width: 86,
-      decoration: _panelDeco,
-      padding: const EdgeInsets.symmetric(vertical: 18),
-      child: Column(
-        children: [
-          _logo(46),
-          const SizedBox(height: 20),
-          _railButton(AppView.home, Icons.home_outlined),
-          _railButton(AppView.search, Icons.search_rounded),
-          _railButton(AppView.library, Icons.library_music_outlined),
-          _railButton(AppView.timer, Icons.timer_outlined),
-          const Spacer(),
-          GestureDetector(
-            onTap: _toggle,
-            child: Container(
-              width: 52,
-              height: 52,
-              decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-              child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: 32),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Container(
-            width: 38,
-            height: 38,
-            decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [accent, accent2])),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _menuRow(AppView v, IconData icon, String label, {Widget? trailing}) {
-    final active = _view == v;
-    return Column(
-      children: [
-        InkWell(
-          onTap: () => setState(() => _view = v),
-          borderRadius: BorderRadius.circular(14),
-          child: Container(
-            height: 52,
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-              color: active ? const Color(0x14FFFFFF) : Colors.transparent,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Row(
-              children: [
-                Container(width: 3, height: 20, margin: const EdgeInsets.only(right: 10), color: active ? Colors.white : Colors.transparent),
-                Icon(icon, color: active ? Colors.white : Colors.white70, size: 22),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(label, style: TextStyle(fontSize: 15, fontWeight: active ? FontWeight.w700 : FontWeight.w500, color: active ? Colors.white : Colors.white70)),
-                ),
-                if (trailing != null) trailing,
-              ],
-            ),
-          ),
-        ),
-        Container(height: 1, color: const Color(0x14FFFFFF)),
-      ],
-    );
-  }
-
-  Widget _eqBars() {
-    const heights = <double>[22, 40, 58, 32, 62, 30, 44];
+  Widget _eq() {
+    const hs = <double>[10, 18, 26, 14, 22];
     return RepaintBoundary(
       child: AnimatedBuilder(
         animation: _eq,
-        builder: (context, child) {
-          return Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: List.generate(heights.length, (i) {
-              final wave = _playing ? (math.sin(_eq.value * 2 * math.pi + i * 1.15) * 0.5 + 0.5) : 0.25;
-              return Container(
-                width: 6,
-                height: heights[i] * (0.35 + 0.65 * wave),
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                decoration: BoxDecoration(color: accent, borderRadius: BorderRadius.circular(3)),
-              );
-            }),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _trackRow(Track tr, int index) {
-    final active = index == _currentIndex;
-    return ListTile(
-      onTap: () => _playTrack(index),
-      leading: Container(
-        width: 42,
-        height: 42,
-        decoration: BoxDecoration(
-          color: active ? const Color(0x3322E06B) : const Color(0x14FFFFFF),
-          borderRadius: BorderRadius.circular(12),
+        builder: (c, _) => Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            for (int i = 0; i < hs.length; i++)
+              Container(
+                width: 3,
+                height: hs[i] * (_playing ? 0.4 + 0.6 * (math.sin(_eq.value * 2 * math.pi + i * 1.3) * 0.5 + 0.5) : 0.3),
+                margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                color: accent,
+              ),
+          ],
         ),
-        child: Icon(active ? Icons.equalizer_rounded : Icons.music_note_rounded, color: active ? accent : Colors.white54, size: 20),
       ),
-      title: Text(tr.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: active ? accent : Colors.white, fontWeight: FontWeight.w600)),
-      subtitle: Text(tr.duration == Duration.zero ? '--:--' : _fmt(tr.duration), style: const TextStyle(color: Colors.white38, fontSize: 11)),
     );
   }
 
-  Widget _listOf(List<int> indexes) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: accent));
-    }
-    if (indexes.isEmpty) {
+  Widget _playerCard() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+      decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0x6622E06B))),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              _eq(),
+              const SizedBox(width: 10),
+              Expanded(child: Text(_cur?.title ?? 'ANTER MUSIC', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700))),
+              if (_sleepLeft != null) Text(_fmt(_sleepLeft), style: const TextStyle(color: accent, fontSize: 12)),
+            ],
+          ),
+          StreamBuilder<Duration>(
+            stream: _player.positionStream,
+            builder: (context, snap) {
+              final dur = _player.duration ?? Duration.zero;
+              final pos = snap.data ?? Duration.zero;
+              final max = dur.inMilliseconds.toDouble().clamp(1.0, double.infinity).toDouble();
+              final val = pos.inMilliseconds.toDouble().clamp(0.0, max).toDouble();
+              return SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  activeTrackColor: accent,
+                  inactiveTrackColor: const Color(0x33FFFFFF),
+                  thumbColor: accent,
+                  trackHeight: 3,
+                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                  overlayShape: const RoundSliderOverlayShape(overlayRadius: 9),
+                ),
+                child: Slider(value: val, max: max, onChanged: (v) => _player.seek(Duration(milliseconds: v.round()))),
+              );
+            },
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(onPressed: () => _player.hasPrevious ? _player.seekToPrevious() : _player.seek(Duration.zero), icon: const Icon(Icons.skip_previous_rounded, size: 30)),
+              GestureDetector(
+                onTap: _toggle,
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  margin: const EdgeInsets.symmetric(horizontal: 16),
+                  decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
+                  child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: 32),
+                ),
+              ),
+              IconButton(onPressed: () => _player.hasNext ? _player.seekToNext() : null, icon: const Icon(Icons.skip_next_rounded, size: 30)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _list(List<int> idx) {
+    if (_loading) return const Center(child: CircularProgressIndicator(color: accent));
+    if (idx.isEmpty) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.music_off_outlined, size: 44, color: Colors.white24),
-            const SizedBox(height: 10),
-            const Text('No songs found', style: TextStyle(color: Colors.white54)),
-            const SizedBox(height: 10),
-            TextButton.icon(onPressed: _loadLibrary, icon: const Icon(Icons.refresh), label: const Text('Rescan')),
+            const Icon(Icons.library_music_outlined, size: 56, color: Colors.white24),
+            const SizedBox(height: 12),
+            const Text('لا توجد أغاني', style: TextStyle(color: Colors.white54, fontSize: 16)),
+            const SizedBox(height: 8),
+            TextButton.icon(onPressed: _load, icon: const Icon(Icons.refresh), label: const Text('إعادة الفحص')),
           ],
         ),
       );
     }
     return ListView.builder(
-      padding: EdgeInsets.zero,
-      itemCount: indexes.length,
-      itemBuilder: (context, n) => _trackRow(_tracks[indexes[n]], indexes[n]),
+      padding: const EdgeInsets.only(bottom: 8),
+      itemCount: idx.length,
+      itemBuilder: (context, n) {
+        final i = idx[n];
+        final t = _tracks[i];
+        final active = i == _current;
+        return ListTile(
+          onTap: () => _play(i),
+          leading: Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(color: active ? const Color(0x3322E06B) : const Color(0x14FFFFFF), borderRadius: BorderRadius.circular(12)),
+            child: Icon(active ? Icons.equalizer_rounded : Icons.music_note_rounded, color: active ? accent : Colors.white54, size: 20),
+          ),
+          title: Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(color: active ? accent : Colors.white, fontWeight: FontWeight.w600)),
+          subtitle: Text(_fmt(t.duration), style: const TextStyle(color: Colors.white38, fontSize: 11)),
+        );
+      },
     );
   }
 
-  List<int> _searchIndexes() {
-    final q = _searchCtrl.text.trim().toLowerCase();
-    if (q.isEmpty) return List.generate(_tracks.length, (i) => i);
-    return [for (int i = 0; i < _tracks.length; i++) if (_tracks[i].title.toLowerCase().contains(q)) i];
-  }
-
-  Widget _timerView() {
-    const names = ['Off', '5 minutes', '10 minutes', '15 minutes', '30 minutes', '60 minutes'];
-    const values = <Duration?>[null, Duration(minutes: 5), Duration(minutes: 10), Duration(minutes: 15), Duration(minutes: 30), Duration(minutes: 60)];
+  Widget _timerTab() {
+    const names = ['إيقاف المؤقت', '5 دقائق', '10 دقائق', '15 دقيقة', '30 دقيقة', '60 دقيقة'];
+    const vals = <Duration?>[null, Duration(minutes: 5), Duration(minutes: 10), Duration(minutes: 15), Duration(minutes: 30), Duration(minutes: 60)];
     return ListView(
-      padding: EdgeInsets.zero,
       children: [
         for (int i = 0; i < names.length; i++)
           ListTile(
-            onTap: () => _setSleep(values[i]),
-            leading: Icon(_sleepRemaining == values[i] ? Icons.radio_button_checked : Icons.radio_button_off, color: accent),
+            onTap: () => _setSleep(vals[i]),
+            leading: Icon(_sleepLeft == vals[i] ? Icons.radio_button_checked : Icons.radio_button_off, color: accent),
             title: Text(names[i], style: const TextStyle(color: Colors.white)),
           ),
       ],
     );
   }
 
-  Widget _viewContent() {
-    switch (_view) {
-      case AppView.home:
-        return Column(
-          children: [
-            _menuRow(AppView.home, Icons.home_outlined, 'Home', trailing: const Icon(Icons.chevron_right, color: Colors.white54)),
-            _menuRow(AppView.search, Icons.search_rounded, 'Search'),
-            _menuRow(AppView.library, Icons.library_music_outlined, 'Your library'),
-            _menuRow(AppView.timer, Icons.timer_outlined, 'Sleep timer', trailing: _sleepRemaining != null ? Container(width: 8, height: 8, decoration: const BoxDecoration(color: accent, shape: BoxShape.circle)) : null),
-            const Spacer(),
-          ],
-        );
-      case AppView.search:
-        return Column(
-          children: [
-            TextField(
-              controller: _searchCtrl,
+  Widget _body() {
+    if (_tab == 2) return _timerTab();
+    if (_tab == 1) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: TextField(
+              controller: _search,
               onChanged: (_) => setState(() {}),
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
-                hintText: 'Search songs...',
+                hintText: 'ابحث عن أغنية...',
                 hintStyle: const TextStyle(color: Colors.white38),
                 prefixIcon: const Icon(Icons.search, color: Colors.white38),
                 filled: true,
                 fillColor: const Color(0x14FFFFFF),
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
               ),
             ),
-            const SizedBox(height: 8),
-            Expanded(child: _listOf(_searchIndexes())),
-          ],
-        );
-      case AppView.library:
-        return _listOf(List.generate(_tracks.length, (i) => i));
-      case AppView.timer:
-        return _timerView();
-    }
-  }
-
-  Widget _nowPlaying() {
-    return Column(
-      children: [
-        const SizedBox(height: 6),
-        _eqBars(),
-        const SizedBox(height: 10),
-        Text(_current?.title ?? 'ANTER MUSIC', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
-        StreamBuilder<Duration>(
-          stream: _player.positionStream,
-          builder: (context, snap) {
-            final dur = _player.duration ?? Duration.zero;
-            final pos = snap.data ?? Duration.zero;
-            final max = dur.inMilliseconds.toDouble().clamp(1.0, double.infinity).toDouble();
-            final value = pos.inMilliseconds.toDouble().clamp(0.0, max).toDouble();
-            return SliderTheme(
-              data: SliderTheme.of(context).copyWith(
-                activeTrackColor: Colors.white,
-                inactiveTrackColor: const Color(0x33FFFFFF),
-                thumbColor: Colors.white,
-                trackHeight: 3,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-              ),
-              child: Slider(value: value, max: max, onChanged: (v) => _player.seek(Duration(milliseconds: v.round()))),
-            );
-          },
-        ),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(onPressed: _previous, icon: const Icon(Icons.fast_rewind_rounded, color: Colors.white, size: 28)),
-            const SizedBox(width: 18),
-            GestureDetector(
-              onTap: _toggle,
-              child: Container(
-                width: 58,
-                height: 58,
-                decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.black, size: 34),
-              ),
-            ),
-            const SizedBox(width: 18),
-            IconButton(onPressed: _next, icon: const Icon(Icons.fast_forward_rounded, color: Colors.white, size: 28)),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Container(height: 1, color: const Color(0x14FFFFFF)),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 10, 4, 0),
-          child: Row(
-            children: [
-              Container(width: 36, height: 36, decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [accent, accent2]))),
-              const SizedBox(width: 10),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('ANTER MUSIC', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700)),
-                    Text('Offline Player', style: TextStyle(color: Colors.white38, fontSize: 11)),
-                  ],
-                ),
-              ),
-              if (_sleepRemaining != null)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Text('⏱ ${_fmt(_sleepRemaining)}', style: const TextStyle(color: accent, fontSize: 12)),
-                ),
-              IconButton(onPressed: _loadLibrary, icon: const Icon(Icons.refresh_rounded, color: Colors.white54, size: 20)),
-            ],
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _panel() {
-    return Expanded(
-      child: Container(
-        decoration: _panelDeco,
-        padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
-        child: Column(
-          children: [
-            Row(children: [_logo(34), const SizedBox(width: 10), const Text('ANTER MUSIC', style: TextStyle(color: accent, fontSize: 19, fontWeight: FontWeight.w800, letterSpacing: 0.5))]),
-            const SizedBox(height: 14),
-            const Align(alignment: Alignment.centerLeft, child: Text('MENU', style: TextStyle(fontSize: 11, letterSpacing: 2, color: Colors.white38))),
-            const SizedBox(height: 6),
-            Expanded(child: _viewContent()),
-            _nowPlaying(),
-          ],
-        ),
-      ),
-    );
+          Expanded(child: _list(_indexes())),
+        ],
+      );
+    }
+    return _list(_indexes());
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: RadialGradient(colors: [Color(0xFF0C2417), Color(0xFF04100A)], center: Alignment(-0.7, -0.5), radius: 1.5),
+        decoration: const BoxDecoration(gradient: LinearGradient(colors: [bgTop, bgBottom], begin: Alignment.topCenter, end: Alignment.bottomCenter)),
+        child: SafeArea(
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(shape: BoxShape.circle, gradient: const LinearGradient(colors: [Color(0xFF3AF07E), Color(0xFF0FA84E)]), boxShadow: [BoxShadow(color: accent.withValues(alpha: 0.5), blurRadius: 14)]),
+                      child: const Icon(Icons.music_note_rounded, color: Colors.black, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('ANTER MUSIC', style: TextStyle(color: accent, fontSize: 18, fontWeight: FontWeight.w800, letterSpacing: 1)),
+                    const Spacer(),
+                    Text('${_tracks.length}', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+                  ],
+                ),
+              ),
+              Expanded(child: _body()),
+              _playerCard(),
+            ],
+          ),
         ),
-        padding: const EdgeInsets.fromLTRB(14, 24, 14, 14),
-        child: Row(
-          children: [
-            _rail(),
-            const SizedBox(width: 12),
-            _panel(),
-          ],
-        ),
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _tab,
+        backgroundColor: const Color(0xFF07130C),
+        selectedItemColor: accent,
+        unselectedItemColor: Colors.white38,
+        onTap: (i) => setState(() => _tab = i),
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.library_music_outlined), label: 'المكتبة'),
+          BottomNavigationBarItem(icon: Icon(Icons.search_rounded), label: 'بحث'),
+          BottomNavigationBarItem(icon: Icon(Icons.timer_outlined), label: 'المؤقت'),
+        ],
       ),
     );
   }
